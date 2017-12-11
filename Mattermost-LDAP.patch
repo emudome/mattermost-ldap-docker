@@ -1,0 +1,221 @@
+--- init_postgres.sh	2017-12-11 09:21:23.413635700 +0900
++++ init_postgres.sh	2017-12-08 10:08:44.388342200 +0900
+@@ -1,7 +1,13 @@
+ #!/bin/bash
+ #This script need right to become postgres user (so root) and to read/write in httpd directory
+ 
+-source config_init.sh
++#Client configuration
++client_id=${CLIENT_ID}
++client_secret=${CLIENT_SECRET}
++redirect_uri=${REDIRECT_URI}
++grant_types="authorization_code"
++scope="api"
++user_id=""
+ 
+ #######################################--Fonctions--###############################################
+ 
+@@ -25,34 +31,21 @@
+ 
+ ###################################################################################################
+ 
+-#Welcome Message
+-info "This script will create a new Oauth role and an associated database for Mattermost-LDAP\nTo edit configuration please edit this script before running !\n"
+-warn "SuperUser right must be ask to create the new role and database in postgres\n"
+-info "Press ctrl+c to stop the script"
+-sleep 5
+-
+-
+-#Creating Oauth role and associated database (need admin account on postgres)
+-info "Creation of role $oauth_user and database $oauth_db ... (need to be root)"
+-sudo -S -u postgres psql -c "CREATE DATABASE $oauth_db_name;"
+-sudo -S -u postgres psql -c "CREATE USER $oauth_user WITH ENCRYPTED PASSWORD '$oauth_pass';"
+-sudo -S -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $oauth_db_name TO $oauth_user;" 
+-
+ #Creating tables for ouath database (use oauth role)
+ info "Creation of tables for database $oauth_db (using $oauth_user)"
+-psql postgres://$oauth_user:$oauth_pass@$ip:$port/$oauth_db_name -c "$create_table_oauth_client"
+-psql postgres://$oauth_user:$oauth_pass@$ip:$port/$oauth_db_name -c "$create_table_oauth_access_tokens"
+-psql postgres://$oauth_user:$oauth_pass@$ip:$port/$oauth_db_name -c "$create_table_oauth_authorization_codes"
+-psql postgres://$oauth_user:$oauth_pass@$ip:$port/$oauth_db_name -c "$create_table_oauth_refresh_tokens"
+-psql postgres://$oauth_user:$oauth_pass@$ip:$port/$oauth_db_name -c "$create_table_users"
+-psql postgres://$oauth_user:$oauth_pass@$ip:$port/$oauth_db_name -c "$create_table_oauth_scopes"
++psql -d $POSTGRES_DB -c "$create_table_oauth_client"
++psql -d $POSTGRES_DB -c "$create_table_oauth_access_tokens"
++psql -d $POSTGRES_DB -c "$create_table_oauth_authorization_codes"
++psql -d $POSTGRES_DB -c "$create_table_oauth_refresh_tokens"
++psql -d $POSTGRES_DB -c "$create_table_users"
++psql -d $POSTGRES_DB -c "$create_table_oauth_scopes"
+ 
+ #Insert new client in the database
+ info "Insert new client in the database"
+-psql postgres://$oauth_user:$oauth_pass@$ip:$port/$oauth_db_name -c "$create_client"
++psql -d $POSTGRES_DB -c "$create_client"
+ 
+ #Verification
+-psql postgres://$oauth_user:$oauth_pass@$ip:$port/$oauth_db_name -c "SELECT * from oauth_clients WHERE client_id='$client_id';" | grep '(1'
++psql -d $POSTGRES_DB -c "SELECT * from oauth_clients WHERE client_id='$client_id';" | grep '(1'
+ 
+ if [ $? ]
+ then ok "Client has been created ! Oauth Database is configured.\n"
+diff -u -r oauth/authorize.php oauth_patch/authorize.php
+--- oauth/authorize.php	2017-12-11 09:21:23.843072200 +0900
++++ oauth_patch/authorize.php	2017-12-06 16:48:37.164815300 +0900
+@@ -54,7 +54,7 @@
+ 
+           <tr>
+             <td align="center">
+-              <div class="LoginTitle">Mattermost souhaite accéder à vos données LDAP :</div>
++              <div class="LoginTitle">Mattermost wants to access your LDAP data :</div>
+         
+ 
+             <form method="post">
+@@ -71,16 +71,16 @@
+                     </tr>
+                     <tr>
+                       <td align="center" width="100%" class="LoginUsername">
+-                        Connecté en tant que : <b>' . $_SESSION['uid'] . ' </b>
++                        Connected as : <b>' . $_SESSION['uid'] . ' </b>
+                       </td>
+                     </tr>
+                     <tr>
+                       <td align="left" width="100%" class="LoginUsername">
+                          
+                         <br/>
+-                        Données souhaitées : <br/>
+-                        &nbsp; -> Identifiant,<br/>
+-                        &nbsp; -> Nom complet,<br/> 
++                        Desired data : <br/>
++                        &nbsp; -> Login,<br/>
++                        &nbsp; -> Full Name,<br/> 
+                         &nbsp; -> Email
+                       
+                       </td>
+diff -u -r oauth/config_db.php oauth_patch/config_db.php
+--- oauth/config_db.php	2017-12-11 09:21:23.863491500 +0900
++++ oauth_patch/config_db.php	2017-12-08 10:03:48.829725600 +0900
+@@ -1,14 +1,14 @@
+ <?php
+ 
+-$port  	  = 5432;
+-$host  	  = "localhost";
+-$name  	  = "oauth_db";
++$port  	  = intval(getenv('DB_PORT'));
++$host  	  = getenv('DB_HOST');
++$name  	  = getenv('DB_NAME');
+ $type	  = "pgsql";
+-$username = "oauth";
+-$password = "oauth_secure-pass";
++$username = getenv('DB_USER');
++$password = getenv('DB_PASS');
+ $dsn	  = $type . ":dbname=" . $name . ";host=" . $host . ";port=" . $port; 
+ 
+ /* Uncomment the line below to set date.timezone to avoid E.Notice raise by strtotime() (in Pdo.php)
+  * If date.timezone is not defined in php.ini or with this function, Mattermost could return a bad token request error
+ */
+-//date_default_timezone_set ('Europe/Paris');
+\ No newline at end of file
++date_default_timezone_set ('UTC');
+diff -u -r oauth/LDAP/config_ldap.php oauth_patch/LDAP/config_ldap.php
+--- oauth/LDAP/config_ldap.php	2017-12-11 09:21:24.087625900 +0900
++++ oauth_patch/LDAP/config_ldap.php	2017-12-08 10:44:04.267240300 +0900
+@@ -1,14 +1,24 @@
+ <?php
+-$hostname = "ldap://company.com/";
+-$port = 389;
++$hostname = getenv('LDAP_HOST');
++$port = intval(getenv('LDAP_PORT'));
+ 
+ // Attribute use to identify user on LDAP - ex : uid, mail, sAMAccountName	
+-$search_attribute = "uid";
++$search_attribute = getenv('LDAP_SEARCH_ATTR');
+ 
+ // variable use in resource.php 
+-$base = "ou=People,o=Company";
+-$filter = "objectClass=*";
++$base = getenv('LDAP_BASE_DN');
++$filter = getenv('LDAP_FILTER');
++if (!is_string($filter)) 
++{
++   $filter = "";
++}
+ 
+ // ldap service user to allow search in ldap
+-$bind_dn = "";
+-$bind_pass = "";
++$bind_dn = getenv('LDAP_BIND_DN');
++$bind_pass = getenv('LDAP_PASS');
++
++$attributes = array(
++  "mail" => getenv('LDAP_MAIL_ATTR'),
++  "name" => getenv('LDAP_NAME_ATTR'),
++  "username" => getenv('LDAP_USERNAME_ATTR'),
++);
+diff -u -r oauth/LDAP/LDAPInterface.php oauth_patch/LDAP/LDAPInterface.php
+--- oauth/LDAP/LDAPInterface.php	2017-12-11 09:21:24.062584800 +0900
++++ oauth_patch/LDAP/LDAPInterface.php	2017-12-07 19:08:37.925245200 +0900
+@@ -46,5 +46,5 @@
+      * @return 
+      * An array with the user's mail and complete name.
+      */
+-    public function getDataForMattermost($base_dn, $filter, $bind_dn, $bind_pass, $search_attribute, $user);
++    public function getDataForMattermost($base_dn, $filter, $bind_dn, $bind_pass, $search_attribute, $user, $attributes);
+ }
+diff -u -r oauth/LDAP/LDAP.php oauth_patch/LDAP/LDAP.php
+--- oauth/LDAP/LDAP.php	2017-12-11 09:21:24.042505300 +0900
++++ oauth_patch/LDAP/LDAP.php	2017-12-11 14:33:53.672327800 +0900
+@@ -150,7 +150,7 @@
+      * @return 
+      * An array with the user's mail and complete name.
+      */
+-    public function getDataForMattermost($base_dn, $filter, $bind_dn, $bind_pass, $search_attribute, $user) {
++    public function getDataForMattermost($base_dn, $filter, $bind_dn, $bind_pass, $search_attribute, $user, $attributes) {
+ 
+     	$attribute=array("cn","mail");
+ 
+@@ -213,19 +213,23 @@
+         	throw new Exception('An error has occured during ldap_first_entry execution. Please check parameter of LDAP/getData.');
+         }
+ 
+-        $mail = ldap_get_values($this->ldap_server, $data, "mail");
++        $mail = ldap_get_values($this->ldap_server, $data, $attributes['mail']);
+         if (!$mail)
+         {
+-        	throw new Exception('An error has occured during ldap_get_values execution (mail). Please check parameter of LDAP/getData.');
++        	throw new Exception('An error has occured during ldap_get_values execution ('.$attributes['mail'].'). Please check parameter of LDAP/getData.');
+         }
+ 
+-        $cn = ldap_get_values($this->ldap_server, $data, "cn");
+-        if (!$cn)
++        $name = ldap_get_values($this->ldap_server, $data, $attributes['name']);
++        if (!$name)
+         {
+-        	throw new Exception('An error has occured during ldap_get_values execution (complete name). Please check parameter of LDAP/getData.');
++        	throw new Exception('An error has occured during ldap_get_values execution ('.$attributes['name'].'). Please check parameter of LDAP/getData.');
+         }
+-
+-        return array("mail" => $mail[0], "cn" => $cn[0]);
++        $username = ldap_get_values($this->ldap_server, $data, $attributes['username']);
++        if (!$username)
++        {
++        	throw new Exception('An error has occured during ldap_get_values execution ('.$attributes['username'].'). Please check parameter of LDAP/getData.');
++        }
++        return array("mail" => $mail[0], "name" => $name[0], "username" => $username[0]);
+     }
+ 
+     /*
+diff -u -r oauth/resource.php oauth_patch/resource.php
+--- oauth/resource.php	2017-12-11 09:24:56.427169800 +0900
++++ oauth_patch/resource.php	2017-12-11 14:55:24.850014800 +0900
+@@ -32,8 +32,9 @@
+ // Try to get user data on the LDAP
+ try
+ {
+-	$data = $ldap->getDataForMattermost($base,$filter,$bind_dn,$bind_pass,$search_attribute,$user);
+-	$resp = array("name" => $data['cn'],"username" => $user,"id" => $assoc_id,"state" => "active","email" => $data['mail']);
++	$data = $ldap->getDataForMattermost($base,$filter,$bind_dn,$bind_pass,$search_attribute,$user,$attributes);
++	$username = explode('@', $data['username']);
++	$resp = array("name" => $data['name'],"username" => $username[0],"id" => $assoc_id,"state" => "active","email" => $data['mail']);
+ }
+ catch (Exception $e)
+ {

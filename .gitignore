@@ -1,0 +1,3 @@
+Mattermost-LDAP/
+app/oauth/
+db/init_postgres.sh

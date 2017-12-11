@@ -1,0 +1,44 @@
+version: '2'
+services:
+  db:
+    build: ./db
+    container_name: oauth-db
+    volumes:
+      - ./volumes/mm-ldap/db:/var/lib/postgresql/data
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - POSTGRES_USER=mm-ldap
+      - POSTGRES_PASSWORD=mm-ldap
+      - POSTGRES_DB=mm-ldap
+      - CLIENT_ID=[client id]
+      - CLIENT_SECRET=[client secret]
+      - REDIRECT_URI
+    restart: always
+  app:
+    build: ./app
+    container_name: oauth-app
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=mm-ldap
+      - DB_USER=mm-ldap
+      - DB_PASS=mm-ldap
+      - LDAP_HOST=[ldap hostname]
+      - LDAP_PORT=389
+      - LDAP_BIND_DN=[bind dn]
+      - LDAP_PASS=[bind password]
+      - LDAP_BASE_DN=[base dn]
+      - LDAP_FILTER
+      - LDAP_SEARCH_ATTR=name
+      - LDAP_MAIL_ATTR=mail
+      - LDAP_NAME_ATTR=cn
+      - LDAP_USERNAME_ATTR=name
+    ports:
+      - "80:80"
+    links:
+      - db:postgres
+    restart: always
